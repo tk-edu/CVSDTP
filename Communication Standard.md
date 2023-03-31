@@ -1,8 +1,8 @@
-# CVSP2PP (working title)
-## Cooperative Visual Search Peer-to-Peer Protocol
+# cvsdtp (working title)
+## Cooperative Visual Search Data Transfer Protocol
 
 ## Purpose
-This data transfer protocol exists as a means by which cooperative visual search task information may be transferred over a LAN connecting two computers running the visual search task software. It exists on top of the TCP/IP protocols.
+This data transfer protocol exists as a means by which cooperative visual search task information may be transferred over a LAN of two computers running the visual search task software. It exists on top of the TCP/IP protocols.
 
 ## Header
 The header of each packet is defined as follows:
@@ -18,14 +18,14 @@ The data section of each packet type starts at 0x01 (offsets in table are relati
 ### Initialization
 | Bits / Bytes | Field                   | Possible Values                          |
 |--------------|-------------------------|------------------------------------------|
-|0x00-0x01(?)  |Sender's target state    |*see target state specification below*    |
-|0x02-0x03(?)  |Sender's distractor state|*see distractor state specification below*|
+|0x0000-0x0281 |Sender's target state    |*see target state specification below*    |
+|0x0282-0x0794 |Sender's distractor state|*see distractor state specification below*|
 
 ### Synchronization / Update
 | Bits / Bytes | Field                   | Possible Values                          |
 |--------------|-------------------------|------------------------------------------|
-|0x00-0x01(?)  |Sender's target state    |*see target state specification below*    |
-|0x04(?)       |Target to update         |*see target specification below*          |
+|0x0000-0x0004 |Target to update         |*see target specification below*          |
+|0x0005-0x0286 |Sender's target state    |*see target state specification below*    |
 
 ### Target State
 list of (x, y) coordinates, shape, and color(?)

@@ -1,0 +1,6 @@
+.vs/
+x64/
+include/SDL2/*
+bin/SDL2.dll
+CVSDTP.exe
+CVSDTP.pdb
