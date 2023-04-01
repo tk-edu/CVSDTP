@@ -18,6 +18,9 @@
     <ClCompile Include="src\cvsdtp.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\sdl_testing.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cvsdtp.h">

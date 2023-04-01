@@ -1,141 +1,189 @@
 #include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
 #include <stdio.h>
-
-#include "SDL.h"
 
 #include "cvsdtp.h"
 
-const int SCREEN_WIDTH = 640;
-const int SCREEN_HEIGHT = 480;
+// https://stackoverflow.com/a/3208376
+#define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
+#define BYTE_TO_BINARY(byte)   \
+  ((byte) & 0x80 ? '1' : '0'), \
+  ((byte) & 0x40 ? '1' : '0'), \
+  ((byte) & 0x20 ? '1' : '0'), \
+  ((byte) & 0x10 ? '1' : '0'), \
+  ((byte) & 0x08 ? '1' : '0'), \
+  ((byte) & 0x04 ? '1' : '0'), \
+  ((byte) & 0x02 ? '1' : '0'), \
+  ((byte) & 0x01 ? '1' : '0')
 
-enum KeyPressSurfaces
-{
-    KEY_PRESS_SURFACE_DEFAULT,
-    KEY_PRESS_SURFACE_UP,
-    KEY_PRESS_SURFACE_DOWN,
-    KEY_PRESS_SURFACE_LEFT,
-    KEY_PRESS_SURFACE_RIGHT,
-    KEY_PRESS_SURFACE_TOTAL
-};
+//void writePacketHeader(CVSDTP_Packet* packet, CVSDTP_PacketType packetType, Device sender, Device receiver) {
+//	uint8_t flags = 0;
+//
+//	// Set packetType bits
+//	switch (packetType) {
+//		case INITIALIZATION: flags |= INITIALIZATION; break;
+//		case UPDATE		   : flags |= UPDATE;		  break;
+//		case COMPLETE	   : flags |= COMPLETE;		  break;
+//		default			   : break;
+//	}
+//	// Set device identity bits
+//	flags |= sender << 2;
+//	flags |= receiver << 3;
+//
+//	packet->header = flags;
+//}
 
-SDL_Surface* getSurfaceOnKeyPress(int key, SDL_Surface* keyPressSurfaces[]) {
-    switch (key) {
-        case SDLK_UP:
-            printf("Up key held\n");
-            return keyPressSurfaces[KEY_PRESS_SURFACE_UP];
-        case SDLK_DOWN:
-            printf("Down key held\n");
-            return keyPressSurfaces[KEY_PRESS_SURFACE_DOWN];
-        case SDLK_LEFT:
-            printf("Left key held\n");
-            return keyPressSurfaces[KEY_PRESS_SURFACE_LEFT];
-        case SDLK_RIGHT:
-            printf("Right key held\n");
-            return keyPressSurfaces[KEY_PRESS_SURFACE_RIGHT];
-        default:
-            return keyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT];
-    }
+/* hey asshole, you should consider using
+cpp for this so that you can use polymorphism
+for the createPacket function and be slay */
+
+inline void setDeviceIdentityBits(uint8_t* header, Device sender, Device receiver) {
+	*header |= sender << 2;
+	*header |= receiver << 3;
 }
 
-SDL_Surface* loadSurface(const char* fullPath, SDL_Surface* screenSurface) {
-    SDL_Surface* surface = SDL_LoadBMP(fullPath);
-    SDL_Surface* optimizedSurface = NULL;
-    if (surface == NULL)
-        printf("Couldn't load image \"%s\"; Error: %s", fullPath, SDL_GetError());
-    else {
-        /* Convert bitmap from 24 - bit to 32 - bit so the conversion
-        doesn't have to be done every time the surface is blitted */
-        optimizedSurface = SDL_ConvertSurface(surface, screenSurface->format, 0);
-        if (optimizedSurface == NULL)
-            printf("Couldn't optimize image \"%s\", Error: %s", fullPath, SDL_GetError());
-    }
-    SDL_FreeSurface(surface);
-    return surface;
+CVSDTP_InitializationPacket createInitPacket(const TargetState* targetState,
+											 const DistractorState* distractorState,
+											 Device sender, Device receiver) {
+	CVSDTP_InitializationPacket packet;
+	uint8_t header = 0;
+
+	header |= INITIALIZATION;
+	setDeviceIdentityBits(&header, sender, receiver);
+	packet.header = header;
+
+	writeInitializationPacketData(&packet, targetState, distractorState);
+
+	return packet;
 }
 
-void loadBMPs(SDL_Surface* keyPressSurfaces[], SDL_Surface* screenSurface) {
-    keyPressSurfaces[KEY_PRESS_SURFACE_UP] = loadSurface("D:\\Code Stuff\\C & C++ Things\\psych_proj\\bin\\up.bmp", screenSurface);
-    keyPressSurfaces[KEY_PRESS_SURFACE_DOWN] = loadSurface("D:\\Code Stuff\\C & C++ Things\\psych_proj\\bin\\down.bmp", screenSurface);
-    keyPressSurfaces[KEY_PRESS_SURFACE_LEFT] = loadSurface("D:\\Code Stuff\\C & C++ Things\\psych_proj\\bin\\left.bmp", screenSurface);
-    keyPressSurfaces[KEY_PRESS_SURFACE_RIGHT] = loadSurface("D:\\Code Stuff\\C & C++ Things\\psych_proj\\bin\\right.bmp", screenSurface);
-    keyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT] = loadSurface("D:\\Code Stuff\\C & C++ Things\\psych_proj\\bin\\hello.bmp", screenSurface);
-    for (int i = 0; i < KEY_PRESS_SURFACE_TOTAL; i++) {
-        if (keyPressSurfaces[i] == NULL)
-            printf("yeah you're gonna wanna look in loadBMPs...; Error: %s", SDL_GetError());
-    }
+CVSDTP_UpdatePacket createUpdatePacket(const Target* target, const TargetState* targetState,
+									   Device sender, Device receiver) {
+	CVSDTP_UpdatePacket packet;
+	uint8_t header = 0;
+
+	header |= UPDATE;
+	setDeviceIdentityBits(&header, sender, receiver);
+	packet.header = header;
+
+	writeUpdatePacketData(&packet, target, targetState);
+
+	return packet;
 }
 
-void freeBMPs(SDL_Surface* keyPressSurfaces[]) {
-    // bad to not check for NULL on these but it's just an example...
-    SDL_FreeSurface(keyPressSurfaces[KEY_PRESS_SURFACE_UP]);
-    SDL_FreeSurface(keyPressSurfaces[KEY_PRESS_SURFACE_DOWN]);
-    SDL_FreeSurface(keyPressSurfaces[KEY_PRESS_SURFACE_LEFT]);
-    SDL_FreeSurface(keyPressSurfaces[KEY_PRESS_SURFACE_RIGHT]);
-    SDL_FreeSurface(keyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT]);
+CVSDTP_CompletionPacket createCompletionPacket(Device sender, Device receiver) {
+	CVSDTP_CompletionPacket packet;
+	uint8_t header = 0;
+
+	header |= COMPLETE;
+	setDeviceIdentityBits(&header, sender, receiver);
+	packet.header = header;
+
+	return packet;
 }
 
-void fillWindow(SDL_Window* window, SDL_Surface* screenSurface) {
-    SDL_FillRect(screenSurface, NULL, SDL_MapRGB(screenSurface->format, 0xFF, 0xFF, 0xFF));
-    SDL_UpdateWindowSurface(window);
+void writeInitializationPacketData(CVSDTP_InitializationPacket* packet, const TargetState* targetState,
+								   const DistractorState* distractorState) {
+	int i = 0;
+	// Copy TargetState to the InitializationPacket
+	for (i = 0; i < targetState->numTargets; i++) {
+		packet->targetState.targets[i] = targetState->targets[i];
+	}
+	packet->targetState.numTargets = targetState->numTargets;
+
+	// Copy DistractorState to the InitializationPacket
+	for (i = 0; i < distractorState->numDistractors; i++) {
+		packet->distractorState.distractors[i] = distractorState->distractors[i];
+	}
+	packet->distractorState.numDistractors = distractorState->numDistractors;
 }
 
-// Initialize SDL subsystems
-SDL_Window* initWindow() {
-    // Video subsystem
-    SDL_Window* window = NULL;
+void writeUpdatePacketData(CVSDTP_UpdatePacket* packet, const Target* target,
+						   const TargetState* targetState) {
+	// Copy TargetState to the UpdatePacket
+	for (int i = 0; i < targetState->numTargets; i++) {
+		packet->targetState.targets[i] = targetState->targets[i];
+	}
+	packet->targetState.numTargets = targetState->numTargets;
 
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        printf("Error! %s\n", SDL_GetError());
-        return NULL;
-    }
-    window = SDL_CreateWindow("ok", SDL_WINDOWPOS_UNDEFINED,
-        SDL_WINDOWPOS_UNDEFINED,
-        SCREEN_WIDTH, SCREEN_HEIGHT,
-        SDL_WINDOW_SHOWN);
-
-    return window;
+	// Copy Target to the UpdatePacket
+	packet->target = *target;
 }
 
-int main(int argc, char* argv[]) {
-    SDL_Window* window = initWindow();
-    // This is the image inside the window
-    SDL_Surface* screenSurface = NULL;
-    // Get the window's surface so we can draw on it
-    screenSurface = SDL_GetWindowSurface(window);
+int sendPacket(CVSDTP_Packet packet) {
+	;
+}
 
-    SDL_Surface* keyPressSurfaces[KEY_PRESS_SURFACE_TOTAL];
-    loadBMPs(keyPressSurfaces, screenSurface);
+int recvPacket() {
+	;
+}
 
-    if (window == NULL)
-        printf("your window doesn't work");
-    else {
-        SDL_Event event;
-        bool quit = false;
-        SDL_Surface* curSurface = keyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT];
-        while (!quit) {
-            while (SDL_PollEvent(&event)) {
-                if (event.type == SDL_QUIT)
-                    quit = true;
-                else if (event.type == SDL_KEYDOWN)
-                    curSurface = getSurfaceOnKeyPress(event.key.keysym.sym, keyPressSurfaces, curSurface);
-                else
-                    curSurface = keyPressSurfaces[KEY_PRESS_SURFACE_DEFAULT];
-                SDL_BlitSurface(curSurface, NULL, screenSurface, NULL);
-                SDL_UpdateWindowSurface(window);
-            }
-        }
-    }
-    freeBMPs(keyPressSurfaces);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    //Target targ;
-    ////targ.color = 
-    //TargetState targState;
-    //Distractor dist;
-    //DistractorState distState;
-    //printf("%d\n", sizeof(targ));
-    //printf("%d\n", sizeof(targState));
-    //printf("%d\n", sizeof(dist));
-    //printf("%d",   sizeof(distState));
-    return 0;
+void printCVSDTP_Packet(const CVSDTP_Packet* packet, CVSDTP_PacketType packetType) {
+	if (packetType == INITIALIZATION) {
+		printf("packetType: INITIALIZATION\n");
+		printf("Header: "BYTE_TO_BINARY_PATTERN"\n", BYTE_TO_BINARY(packet->initPacket.header));
+		printf("numTargets: %d\nnumDistractors: %d\n", packet->initPacket.targetState.numTargets,
+			packet->initPacket.distractorState.numDistractors);
+	}
+	else if (packetType == UPDATE) {
+		printf("packetType: UPDATE\n");
+		printf("Header: "BYTE_TO_BINARY_PATTERN"\n", BYTE_TO_BINARY(packet->updatePacket.header));
+		printf("target: (%d, %d)\n", packet->updatePacket.target.coords.x, packet->updatePacket.target.coords.y);
+		printf("numTargets: %d\n", packet->updatePacket.targetState.numTargets);
+	}
+	else {
+		printf("packetType: COMPLETE\n");
+		printf("Header: "BYTE_TO_BINARY_PATTERN"\n", BYTE_TO_BINARY(packet->completePacket.header));
+	}
+}
+
+Target createTarget(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color) {
+	return (Target){.coords = coords, .shape = shape, .rotation = rotation, .color = color, .found = false};
+}
+
+Distractor createDistractor(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color) {
+	return (Distractor){.coords = coords, .shape = shape, .rotation = rotation, .color = color};
+}
+
+/* Generate random coordinates in range xBounds,
+yBounds (set seed to NULL to omit seeding) */
+Vec2 getRandomCoords(Vec2 xBounds, Vec2 yBounds, uint32_t seed) {
+	Vec2 coords;
+
+	if (seed != NULL)
+		srand(seed);
+
+	// https://stackoverflow.com/a/1202706
+	coords.x = rand() % (xBounds.y + 1 - xBounds.x) + xBounds.x;
+	coords.y = rand() % (yBounds.y + 1 - yBounds.x) + yBounds.x;
+
+	return coords;
+}
+
+int main() {
+	//CVSDTP_Packet packet = createPacket(INITIALIZATION, PC1, PC2);
+	Vec2 targetCoords = getRandomCoords((Vec2){0, 1000}, (Vec2){0, 1000}, 7);
+	Target target = createTarget(targetCoords, L, UP, RED);
+
+	TargetState targetState = {.numTargets = 1, .targets = {target}};
+
+	Vec2 distractorCoords = getRandomCoords((Vec2){0, 1000}, (Vec2){0, 1000}, NULL);
+	Distractor distractor = createDistractor(distractorCoords, T, RIGHT, PINK);
+
+	DistractorState distractorState = {.numDistractors = 1, .distractors = {distractor}};
+
+	CVSDTP_InitializationPacket initPacket = createInitPacket((const TargetState*)&targetState,
+		(const DistractorState*)&distractorState, PC1, PC2);
+	CVSDTP_UpdatePacket updatePacket = createUpdatePacket((const Target*)&target,
+		(const TargetState*)&targetState, PC1, PC2);
+	CVSDTP_CompletionPacket completePacket = createCompletionPacket(PC2, PC1);
+
+	printCVSDTP_Packet((const CVSDTP_Packet*)&initPacket, INITIALIZATION);
+	printf("\n");
+	printCVSDTP_Packet((const CVSDTP_Packet*)&updatePacket, UPDATE);
+	printf("\n");
+	printCVSDTP_Packet((const CVSDTP_Packet*)&completePacket, COMPLETE);
+
+	return 0;
 }

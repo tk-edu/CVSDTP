@@ -138,6 +138,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\cvsdtp.c" />
+    <ClCompile Include="src\sdl_testing.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cvsdtp.h" />

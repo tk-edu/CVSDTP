@@ -18,14 +18,14 @@ The data section of each packet type starts at 0x01 (offsets in table are relati
 ### Initialization
 | Bits / Bytes | Field                   | Possible Values                          |
 |--------------|-------------------------|------------------------------------------|
-|0x0000-0x0281 |Sender's target state    |*see target state specification below*    |
-|0x0282-0x0794 |Sender's distractor state|*see distractor state specification below*|
+|0x00-0x10     |Sender's target state    |*see target state specification below*    |
+|0x11-0x20     |Sender's distractor state|*see distractor state specification below*|
 
 ### Synchronization / Update
 | Bits / Bytes | Field                   | Possible Values                          |
 |--------------|-------------------------|------------------------------------------|
-|0x0000-0x0004 |Target to update         |*see target specification below*          |
-|0x0005-0x0286 |Sender's target state    |*see target state specification below*    |
+|0x00-0x04     |Target to update         |*see target specification below*          |
+|0x05-0x15     |Sender's target state    |*see target state specification below*    |
 
 ### Target State
 list of (x, y) coordinates, shape, and color(?)
