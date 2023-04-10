@@ -21,6 +21,12 @@
     <ClCompile Include="src\sdl_testing.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\wsa_testing_server.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\wsa_testing_client.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\cvsdtp.h">

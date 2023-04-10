@@ -1,24 +1,56 @@
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 
-/*
-Maybe enable -fshort-enums gcc flag to
-see if it speeds things up enough,
-considering this data goes over a wire
-*/
+#include <WinSock2.h>
+#include <WS2tcpip.h>
 
-#define MAX_TARGETS     16
-#define MAX_DISTRACTORS 32
+#define MAX_TARGETS         16
+#define MAX_DISTRACTORS     32
 
-/*
-* Maybe in the end it'll make more sense to
-* eat the extra bytes and just send the data
-* these constants represent over the wire. If
-* the extra time dedicated to doing logic on
-* them is slowing things down, maybe try that.
-*/
+#define COORD_BOUNDS 		(Vec2){0, 1000}
+#define SHAPE_BOUNDS		(Vec2){0,	 4}
+#define ROTATION_BOUNDS		(Vec2){0,	 3}
+#define COLOR_BOUNDS		(Vec2){0,	 4}
+
+// sizeof CVSDTP_Packet
+#define PACKET_SIZE			416
+// 512 bytes of data, +1 for null-terminator, +32 for UDP header
+#define DATA_BUF_LEN		512 + 1
+#define UDP_PACKET_LEN		DATA_BUF_LEN + 32
+
+// Checks if a given bit is set
+#define IS_SET(var, offset) (var >> offset) & 1
+// Determines packetType by header bits (checks the
+// first 2 bits; see 'Communication Standard.md')
+#define IS_INIT(header)	       ~IS_SET(header, 1) && ~IS_SET(header, 0)
+#define IS_UPDATE(header)      ~IS_SET(header, 1) &&  IS_SET(header, 0)
+#define IS_INITIALIZED(header)  IS_SET(header, 1) && ~IS_SET(header, 0)
+#define IS_COMPLETE(header)		IS_SET(header, 1) &&  IS_SET(header, 0)
+
+#define CHECKSUM			0xA
+
+#define EXPORT __declspec(dllimport)
+
+// For printing binary numbers
+// https://stackoverflow.com/a/3208376
+#define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
+#define BYTE_TO_BINARY(byte)   \
+  ((byte) & 0x80 ? '1' : '0'), \
+  ((byte) & 0x40 ? '1' : '0'), \
+  ((byte) & 0x20 ? '1' : '0'), \
+  ((byte) & 0x10 ? '1' : '0'), \
+  ((byte) & 0x08 ? '1' : '0'), \
+  ((byte) & 0x04 ? '1' : '0'), \
+  ((byte) & 0x02 ? '1' : '0'), \
+  ((byte) & 0x01 ? '1' : '0')
+
+/* Object Property Enums */
 
 typedef enum {
     TRIANGLE,
@@ -44,18 +76,13 @@ typedef enum {
 } ObjectColor;
 
 typedef enum {
-    INITIALIZATION,
-    UPDATE,
-    UNUSED,
-    COMPLETE
-} CVSDTP_PacketType;
-
-typedef enum {
     PC1,
     PC2
 } Device;
 
 #pragma pack(push, 1)
+
+/* Objects */
 
 // 22 bits
 typedef struct {
@@ -65,22 +92,24 @@ typedef struct {
 	uint32_t y : 11;
 } Vec2;
 
-// 29 bits
+// 31 bits
 typedef struct {
     Vec2 coords;
-    ObjectShape shape : 2;
-    ObjectColor color : 2;
+    ObjectShape shape : 3;
+    ObjectColor color : 3;
     ObjectRotation rotation : 2;
     bool found : 1;
 } Target;
 
-// 28 bits
+// 30 bits
 typedef struct {
     Vec2 coords;
-    ObjectShape shape : 2;
-    ObjectColor color : 2;
+    ObjectShape shape : 3;
+    ObjectColor color : 3;
     ObjectRotation rotation : 2;
 } Distractor;
+
+/* ObjectStates */
 
 typedef struct {
 	uint8_t numTargets : 7;
@@ -94,51 +123,61 @@ typedef struct {
 
 #pragma pack(pop)
 
-// CVSDPT_Packets
+/* CVSDPT_Packets */
+
+typedef enum {
+	INITIALIZATION,
+	UPDATE,
+	INITIALIZED,
+	COMPLETE
+} CVSDTP_PacketType;
 
 typedef struct {
-	uint8_t header : 4;
-	TargetState targetState;
-	DistractorState distractorState;
-} CVSDTP_InitializationPacket;
-
-typedef struct {
-	uint8_t header : 4;
+	CVSDTP_PacketType type : 2;
+	Device sender : 1;
+	Device receiver : 1;
 	Target target;
 	TargetState targetState;
-} CVSDTP_UpdatePacket;
-
-typedef struct {
-	uint8_t header : 4;
-} CVSDTP_CompletionPacket;
-
-typedef union {
-	CVSDTP_InitializationPacket initPacket;
-	CVSDTP_UpdatePacket updatePacket;
-	CVSDTP_CompletionPacket completePacket;
+	DistractorState distractorState;
 } CVSDTP_Packet;
 
-// CVSDPT_Packet creation functions
+/* Main API Functions */
 
-CVSDTP_InitializationPacket createInitPacket(const TargetState* targetState, const DistractorState* distractorState, 
-								Device sender, Device receiver);
-CVSDTP_UpdatePacket		    createUpdatePacket(const Target* target, const TargetState* targetState,
-								Device sender, Device receiver);
-CVSDTP_CompletionPacket		createCompletionPacket(Device sender, Device receiver);
+/*EXPORT*/ int CVSDTP_Startup(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort, uint32_t seed);
+/*EXPORT*/ void CVSDTP_Cleanup();
+/*EXPORT*/ DWORD WINAPI CVSDTP_StartSenderThread();
+/*EXPORT */void CVSDTP_StopSenderThread();
+/*EXPORT*/ DWORD WINAPI CVSDTP_StartReceiverThread();
+/*EXPORT*/ void CVSDTP_StopReceiverThread();
 
-void writeInitializationPacketData(CVSDTP_InitializationPacket* packet, const TargetState* targetState,
-	const DistractorState* distractorState);
-void writeUpdatePacketData(CVSDTP_UpdatePacket* packet, const Target* target,
-	const TargetState* targetState);
+/* CVSDPT_Packet Creation Functions */
 
-int sendPacket(CVSDTP_Packet packet);
-int recvPacket();
+//CVSDTP_Packet createInitPacket(const TargetState* targetState, const DistractorState* distractorState, 
+//							   Device sender, Device receiver);
+//CVSDTP_Packet createUpdatePacket(const Target* target, const TargetState* targetState,
+//								 Device sender, Device receiver);
+//CVSDTP_Packet createCompletionPacket(Device sender, Device receiver);
 
-void printCVSDTP_Packet(const CVSDTP_Packet* packet, CVSDTP_PacketType packetType);
+/* CVSDPT_Packet Transfer Functions */
 
-// Target and Distractor creation functions
+//CVSDTP_Packet receiveInitPacket(uint8_t buffer[]);
+//CVSDTP_Packet receiveUpdatePacket(uint8_t buffer[]);
+//CVSDTP_Packet receiveCompletionPacket(uint8_t buffer[]);
+
+int sendCVSDTP_Packet(const SOCKET* socket, const SOCKADDR* dstAddr, const CVSDTP_Packet* packet);
+int recvCVSDTP_Packet(const SOCKET* socket, uint8_t dataBuffer[], const SOCKADDR* srcAddr,
+					  const int* srcAddrLen, const CVSDTP_Packet* receivedPacket);
+
+void printCVSDTP_Packet(const CVSDTP_Packet* packet);
+
+/* Object Creation Functions */
 
 Target createTarget(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
 Distractor createDistractor(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
 
-Vec2 getRandomCoords(Vec2 xBounds, Vec2 yBounds, uint32_t seed);
+// TODO: move this somewhere more appropriate
+Vec2 getRandomCoords(Vec2 xBounds, Vec2 yBounds);
+
+#ifdef __cplusplus
+}
+#endif
