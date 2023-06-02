@@ -13,16 +13,13 @@ extern "C" {
 #define MAX_TARGETS         16
 #define MAX_DISTRACTORS     32
 
-#define COORD_BOUNDS 		(Vec2){0, 1000}
+#define COORD_BOUNDS 		(Vec2){0, 2048}
 #define SHAPE_BOUNDS		(Vec2){0,	 4}
 #define ROTATION_BOUNDS		(Vec2){0,	 3}
 #define COLOR_BOUNDS		(Vec2){0,	 4}
 
 // sizeof CVSDTP_Packet
 #define PACKET_SIZE			416
-// 512 bytes of data, +1 for null-terminator, +32 for UDP header
-#define DATA_BUF_LEN		512 + 1
-#define UDP_PACKET_LEN		DATA_BUF_LEN + 32
 
 // Checks if a given bit is set
 #define IS_SET(var, offset) (var >> offset) & 1
@@ -33,9 +30,7 @@ extern "C" {
 #define IS_INITIALIZED(header)  IS_SET(header, 1) && ~IS_SET(header, 0)
 #define IS_COMPLETE(header)		IS_SET(header, 1) &&  IS_SET(header, 0)
 
-#define CHECKSUM			0xA
-
-#define EXPORT __declspec(dllimport)
+#define EXPORT				__declspec(dllimport)
 
 // For printing binary numbers
 // https://stackoverflow.com/a/3208376
@@ -50,7 +45,7 @@ extern "C" {
   ((byte) & 0x02 ? '1' : '0'), \
   ((byte) & 0x01 ? '1' : '0')
 
-/* Object Property Enums */
+/* Object Properties */
 
 typedef enum {
     TRIANGLE,
@@ -141,42 +136,27 @@ typedef struct {
 	DistractorState distractorState;
 } CVSDTP_Packet;
 
-/* Main API Functions */
+/* Boilerplate Functions */
 
-/*EXPORT*/ int CVSDTP_Startup(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort, uint32_t seed);
+/*EXPORT*/ int CVSDTP_Startup(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort, int seed);
 /*EXPORT*/ void CVSDTP_Cleanup();
 /*EXPORT*/ DWORD WINAPI CVSDTP_StartSenderThread();
-/*EXPORT */void CVSDTP_StopSenderThread();
 /*EXPORT*/ DWORD WINAPI CVSDTP_StartReceiverThread();
-/*EXPORT*/ void CVSDTP_StopReceiverThread();
-
-/* CVSDPT_Packet Creation Functions */
-
-//CVSDTP_Packet createInitPacket(const TargetState* targetState, const DistractorState* distractorState, 
-//							   Device sender, Device receiver);
-//CVSDTP_Packet createUpdatePacket(const Target* target, const TargetState* targetState,
-//								 Device sender, Device receiver);
-//CVSDTP_Packet createCompletionPacket(Device sender, Device receiver);
 
 /* CVSDPT_Packet Transfer Functions */
 
-//CVSDTP_Packet receiveInitPacket(uint8_t buffer[]);
-//CVSDTP_Packet receiveUpdatePacket(uint8_t buffer[]);
-//CVSDTP_Packet receiveCompletionPacket(uint8_t buffer[]);
-
-int sendCVSDTP_Packet(const SOCKET* socket, const SOCKADDR* dstAddr, const CVSDTP_Packet* packet);
-int recvCVSDTP_Packet(const SOCKET* socket, uint8_t dataBuffer[], const SOCKADDR* srcAddr,
-					  const int* srcAddrLen, const CVSDTP_Packet* receivedPacket);
-
-void printCVSDTP_Packet(const CVSDTP_Packet* packet);
+/*EXPORT*/ int CVSDTP_SendPacket(const CVSDTP_Packet* packet);
+/*EXPORT*/ int CVSDTP_RecvPacket(CVSDTP_Packet* receivedPacket);
 
 /* Object Creation Functions */
 
-Target createTarget(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
-Distractor createDistractor(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
+/*EXPORT*/ Target CVSDTP_CreateTarget(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
+/*EXPORT*/ Distractor CVSDTP_CreateDistractor(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
+/*EXPORT*/ CVSDTP_Packet CVSDTP_CreateRandomState(int numTargets, int numDistractors);
 
 // TODO: move this somewhere more appropriate
-Vec2 getRandomCoords(Vec2 xBounds, Vec2 yBounds);
+Vec2 getRandomCoords();
+void printCVSDTP_Packet(const CVSDTP_Packet* packet);
 
 #ifdef __cplusplus
 }

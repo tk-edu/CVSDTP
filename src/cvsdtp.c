@@ -3,10 +3,10 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <time.h>
 
 #include <WinSock2.h>
 #include <Ws2tcpip.h>
-//#include <iphlpapi.h>
 #include <Windows.h>
 
 #include "cvsdtp.h"
@@ -21,14 +21,19 @@ static int gDstAddrLen;
 static struct sockaddr_in gLocalAddr;
 static int gLocalAddrLen;
 
-static bool isInitialized = false;
 static CVSDTP_Packet gInitPacket;
-static uint32_t gSeed;
+static bool gOtherIsInitialized = false;
+static bool gIsInitialized = false;
+static int gSeed;
 
 static WSADATA gWsaData;
 
-static HANDLE gSenderThread;
-static HANDLE gReceiverThread;
+static HANDLE gReceiverThread = NULL;
+static HANDLE gSenderThread = NULL;
+/* Critical Section is like a Mutex,
+but faster and can't be shared between
+processes (which doesn't matter for this) */
+CRITICAL_SECTION gCritSec;
 
 /* Main API Helper Functions */
 
@@ -83,7 +88,8 @@ static void getLocalIPInfo(const uint16_t localPort) {
 	gLocalAddrLen = sizeof(gLocalAddr);
 }
 
-static int initWinSock(const char* dstIpAddr, const uint16_t dstPort) {
+static int initWinSock(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort) {
+	getLocalIPInfo(localPort);
 	// Initialize WinSock
 	if (WSAStartup(MAKEWORD(2, 2), &gWsaData) != NO_ERROR) {
 		printf("WinSock failed to initialize; Error: %d", WSAGetLastError());
@@ -104,7 +110,6 @@ static int initWinSock(const char* dstIpAddr, const uint16_t dstPort) {
 	}
 
 	// Initialize sockaddr_in to hold destination address info
-	//const uint16_t dstPort = 4567; // see wsa_testing_server.c
 	gDstAddr.sin_family = AF_INET;
 	gDstAddr.sin_port = htons(dstPort);
 	inet_pton(AF_INET, dstIpAddr, &gDstAddr.sin_addr.s_addr);
@@ -113,22 +118,22 @@ static int initWinSock(const char* dstIpAddr, const uint16_t dstPort) {
 	return 0;
 }
 
-static CVSDTP_Packet createCVSDTP_State() {
+CVSDTP_Packet CVSDTP_CreateRandomState(int numTargets, int numDistractors) {
 	CVSDTP_Packet packet = {.type = INITIALIZATION};
 
 	// Create random Targets
-	for (int i = 0; i < MAX_TARGETS; i++) {
-		packet.targetState.targets[i] = createTarget(getRandomCoords(COORD_BOUNDS, COORD_BOUNDS),
+	for (int i = 0; i < numTargets; i++) {
+		packet.targetState.targets[i] = CVSDTP_CreateTarget(getRandomCoords(),
 			getRandomShape(), getRandomRotation(), getRandomColor());
 	}
-	packet.targetState.numTargets = MAX_TARGETS;
+	packet.targetState.numTargets = numTargets;
 
 	// Create random Distractors
-	for (int i = 0; i < MAX_DISTRACTORS; i++) {
-		packet.distractorState.distractors[i] = createDistractor(getRandomCoords(COORD_BOUNDS, COORD_BOUNDS),
+	for (int i = 0; i < numDistractors; i++) {
+		packet.distractorState.distractors[i] = CVSDTP_CreateDistractor(getRandomCoords(),
 			getRandomShape(), getRandomRotation(), getRandomColor());
 	}
-	packet.distractorState.numDistractors = MAX_DISTRACTORS;
+	packet.distractorState.numDistractors = numDistractors;
 
 	return packet;
 }
@@ -141,137 +146,196 @@ static int sum(uint8_t data[]) {
 }
 
 static bool checksum(uint8_t data[]) {
-	int sum = 0, i = 0;
+	uint8_t sum = 0, i = 0;
 	for (i = 0; i < 4; i++) {
 		sum += data[i];
-		printf("byte %d: %d\n", i, data[i]);
+		//printf("byte %d: %d\n", i, data[i]);
 	}
 	if (sum == data[i])
 		return true;
 	return false;
 }
 
+static int byteArrToInt(uint8_t data[]) {
+	int finalInt = 0;
+	for (int i = 0; i < 4; i++) {
+		finalInt |= data[i];
+	}
+	return finalInt;
+}
+
 /* Main API Functions */
 
-int CVSDTP_Startup(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort, uint32_t seed) {
+int CVSDTP_Startup(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort, int seed) {
+	if (!InitializeCriticalSectionAndSpinCount(&gCritSec, 0x00000400))
+		return 1;
+
 	if (seed != NULL)
-		srand(seed);
-	CVSDTP_Packet randState = createCVSDTP_State();
-	memcpy(&gInitPacket, &randState, PACKET_SIZE);
+		gSeed = seed;
 
-	getLocalIPInfo(localPort);
-
-	int winSockRes = initWinSock(dstIpAddr, dstPort);
-	if (winSockRes == SOCKET_ERROR)
+	if (initWinSock(dstIpAddr, dstPort, localPort) == SOCKET_ERROR)
 		return 1;
 
 	// Create threads and wait
 	gReceiverThread = CreateThread(NULL, 0, CVSDTP_StartReceiverThread, NULL, 0, NULL);
-	if (gReceiverThread == NULL) 
-	{
+	if (gReceiverThread == NULL) {
 		printf("Failed to create receiver thread");
-		ExitProcess(3);
+		return 1;
 	}
 	else
-		printf("Listening on port %d...\n\n", localPort);
+		printf("Listening on port %d...\n", localPort);
 
-	gSenderThread = CreateThread(NULL, 0, CVSDTP_StartSenderThread, NULL, 0, NULL);
-	if (gSenderThread == NULL)
-	{
-		printf("Failed to create sender thread");
-		ExitProcess(3);
+	/* Wait for 1s to see if this instance receives
+	any data from another instance. If not, then start
+	sending data ourselves */
+	DWORD waitRes = WaitForSingleObject(gReceiverThread, 1000);
+	if (waitRes == WAIT_TIMEOUT) {
+		gSenderThread = CreateThread(NULL, 0, CVSDTP_StartSenderThread, NULL, 0, NULL);
+		if (gSenderThread == NULL) {
+			printf("Failed to create sender thread");
+			return 1;
+		}
+		else
+			printf("Sending initialization packets to %s:%d...\n", dstIpAddr, dstPort);
 	}
-	else
-		printf("Sending initialization packets to %s:%d...\n", dstIpAddr, dstPort);
+	printf("Instance seed: %d\n", gSeed);
 
-	WaitForMultipleObjects(2, (const HANDLE[]){gSenderThread, gReceiverThread}, TRUE, INFINITE);
+	// Wait for both threads to terminate, at which point initialization should be complete
+	WaitForSingleObject(gReceiverThread, INFINITE);
+
+	// Tell other instance that we are initialized
+	CVSDTP_Packet initializedPacket = {.type = INITIALIZED};
+	if (CVSDTP_SendPacket(&initializedPacket) == SOCKET_ERROR)
+		return SOCKET_ERROR;
+
+	CVSDTP_SendPacket(&gInitPacket);
 
 	printf("Initialized with seed %d", gSeed);
 
-	return winSockRes;
+	return 0;
 }
 
 void CVSDTP_Cleanup() {
 	closesocket(gLocalSocket);
+	DeleteCriticalSection(&gCritSec);
 	CloseHandle(gSenderThread);
 	CloseHandle(gReceiverThread);
 	WSACleanup();
 }
 
-DWORD WINAPI CVSDTP_StartSenderThread() {
-	uint32_t thisSeed = rand();
-	uint8_t thisSeedBytes[5];
-	memcpy(thisSeedBytes, &thisSeed, sizeof(uint32_t));
-	// Checksum
-	thisSeedBytes[4] = sum(thisSeedBytes);
-	printf("Press enter to send an initialization packet\n");
-	uint8_t dummyBuf[1];
+int CVSDTP_SendPacket(const CVSDTP_Packet* packet) {
+	// Copy packet into byte array
+	uint8_t dataBuffer[PACKET_SIZE];
+	memcpy(dataBuffer, packet, PACKET_SIZE);
 
-	/* Send initialization packets until the receiver thread
-	gets an acknowledgement back from the other instance */
-	while (!isInitialized) {
-		gets(dummyBuf);
-		sendto(gLocalSocket, (const uint8_t*)thisSeedBytes, 4 + 1, 0, (SOCKADDR*)&gDstAddr, gDstAddrLen);
-	}
-
-	// Tell other instance that we are initialized
-	memset(thisSeedBytes, 0, sizeof(uint32_t));
-	sendto(gLocalSocket, thisSeedBytes, sizeof(uint32_t) + 1, 0, (SOCKADDR*)&gDstAddr, gDstAddrLen);
-
-	CVSDTP_Packet initializedPacket = {.type = INITIALIZED};
-	uint8_t initPacketBytes[DATA_BUF_LEN];
-	memcpy(initPacketBytes, &initializedPacket, PACKET_SIZE);
-
-	if (sendCVSDTP_Packet((const SOCKET*)&gLocalSocket, (const SOCKADDR*)&gDstAddr,
-		(const CVSDTP_Packet*)&initializedPacket) == SOCKET_ERROR) {
+	// Send packet
+	if (sendto(gLocalSocket, dataBuffer, PACKET_SIZE, 0, &gDstAddr, sizeof(struct sockaddr_in)) == SOCKET_ERROR) {
+		printf("Failed to send data to dstAddr; Error: %d", WSAGetLastError());
 		return SOCKET_ERROR;
 	}
 
 	return 0;
 }
 
-void CVSDTP_StopSenderThread() {
+int CVSDTP_RecvPacket(CVSDTP_Packet* receivedPacket) {
+	uint8_t dataBuffer[PACKET_SIZE];
+	int bytesReceived = SOCKET_ERROR;
+	bytesReceived = recvfrom(gLocalSocket, dataBuffer, PACKET_SIZE, 0, &gDstAddr, &gDstAddrLen);
 
+	if (bytesReceived == SOCKET_ERROR) {
+		printf("Failed to receive data from dstAddr; Error: %d", WSAGetLastError());
+		return SOCKET_ERROR;
+	}
+	memcpy(receivedPacket, dataBuffer, PACKET_SIZE);
+
+	return 0;
+}
+
+DWORD WINAPI CVSDTP_StartSenderThread() {
+	const int seedSize = sizeof(int);
+	srand(time(NULL));
+	gSeed = rand();
+	uint8_t thisSeedBytes[5];
+	memcpy(thisSeedBytes, &gSeed, seedSize);
+	// Checksum byte after seed
+	thisSeedBytes[4] = sum(thisSeedBytes);
+
+	/* Send initialization packets until the receiver thread
+	gets an acknowledgement back from the other instance */
+	while (true) {
+		// Get ownership of gIsInitialized and check its state
+		EnterCriticalSection(&gCritSec);
+		if (!gIsInitialized) {
+			LeaveCriticalSection(&gCritSec);
+			// Size of seed is +1 to account for the checksum byte
+			sendto(gLocalSocket, (const uint8_t*)thisSeedBytes, 4 + 1, 0, (SOCKADDR*)&gDstAddr, gDstAddrLen);
+			Sleep(500);
+		}
+		else {
+			LeaveCriticalSection(&gCritSec);
+			break;
+		}
+	}
+
+	// Tell other instance that we are initialized
+	/*memset(thisSeedBytes, 0, seedSize + 1);
+	sendto(gLocalSocket, thisSeedBytes, seedSize + 1, 0, (SOCKADDR*)&gDstAddr, gDstAddrLen);*/
+
+	//CVSDTP_Packet initializedPacket = {.type = INITIALIZED};
+
+	//if (CVSDTP_SendPacket(&initializedPacket) == SOCKET_ERROR)
+	//	return SOCKET_ERROR;
+
+	return TRUE;
 }
 
 DWORD WINAPI CVSDTP_StartReceiverThread() {
 	// Receive seed from other instance
-	uint32_t otherSeed;
+	const int intSize = sizeof(int);
+	uint8_t dataBuffer[5];
 
-	// Wait to receive a packet from the receiver instance
-	uint8_t dataBuffer[UDP_PACKET_LEN];
 	int bytesReceived = 0;
 	// Wait for the checksum to succeed
 	do {
-		bytesReceived = recvfrom(gLocalSocket, dataBuffer, sizeof(uint32_t) + 1, 0, (SOCKADDR*)&gDstAddr, &gDstAddrLen);
-		for (int i = 0; i < 5; i++)
+		bytesReceived = recvfrom(gLocalSocket, dataBuffer, 5, 0, (SOCKADDR*)&gDstAddr, &gDstAddrLen);
+		/*for (int i = 0; i < 5; i++)
 			printf(BYTE_TO_BINARY_PATTERN"\n", BYTE_TO_BINARY(dataBuffer[i]));
+		printf("\n");*/
 	} while (!checksum(dataBuffer));
 
-	memcpy(&otherSeed, dataBuffer, sizeof(uint32_t));
+	int otherSeed = byteArrToInt(dataBuffer);
+	printf("Received seed: %d\n", otherSeed);
 
-	if (recvCVSDTP_Packet((const SOCKET*)&gLocalSocket, &dataBuffer,
-		(const SOCKADDR*)&gDstAddr, &gDstAddrLen, &gInitPacket) == SOCKET_ERROR) {
+	/* TODO: the "winning seed" idea isn't really working
+	out too great... but i think that what i need to happen
+	is something like this:
+		1) first instance is started and waits for other to start
+		2) first instance receives seed from the other instance
+		3) they both initialize on the second instance's seed */
+
+	if (CVSDTP_RecvPacket(&dataBuffer, &gInitPacket) == SOCKET_ERROR)
 		return SOCKET_ERROR;
-	}
 
 	/* If they win, set our seed to their seed.
 	If we win, set our seed to our seed */
-	if (gInitPacket.type == INITIALIZED)
+	if (gInitPacket.type == INITIALIZED) {
+		printf("Using other seed...\n");
 		srand(otherSeed);
-	else {
-		srand(gSeed);
-		CVSDTP_Packet randState = createCVSDTP_State();
-		memcpy(&gInitPacket, &randState, PACKET_SIZE);
+		gSeed = otherSeed;
 	}
+	else
+		srand(gSeed);
+	printf("Using our seed...\n");
+	
+	CVSDTP_Packet initState = createCVSDTP_State(MAX_TARGETS, MAX_DISTRACTORS);
+	memcpy(&gInitPacket, &initState, PACKET_SIZE);
 
-	isInitialized = true;
+	// Get ownership of gIsInitialized and set its state
+	EnterCriticalSection(&gCritSec);
+	gIsInitialized = true;
+	LeaveCriticalSection(&gCritSec);
 
-	return 0;
-}
-
-void CVSDTP_StopReceiverThread() {
-
+	return TRUE;
 }
 
 /* Packet Creation Helper Functions */
@@ -315,37 +379,6 @@ CVSDTP_Packet createPacket(CVSDTP_PacketType packetType, const Target* target, c
 	return packet;
 }
 
-/* CVSDTP_Packet Transfer Functions */
-
-int sendCVSDTP_Packet(const SOCKET* socket, const SOCKADDR* dstAddr, const CVSDTP_Packet* packet) {
-	// Copy packet into byte array
-	uint8_t dataBuffer[DATA_BUF_LEN];
-	memcpy(dataBuffer, &packet, PACKET_SIZE);
-
-	// Send packet
-	if (sendto(socket, dataBuffer, PACKET_SIZE, 0, &dstAddr, sizeof(struct sockaddr_in)) == SOCKET_ERROR) {
-		printf("Failed to send data to theirAddr; Error: %d", WSAGetLastError());
-		return SOCKET_ERROR; // should i be returning this?
-	}
-	return 0;
-}
-
-int recvCVSDTP_Packet(const SOCKET* socket, uint8_t dataBuffer[], const SOCKADDR* srcAddr,
-								const int* srcAddrLen, const CVSDTP_Packet* receivedPacket) {
-	int bytesReceived = SOCKET_ERROR;
-	bytesReceived = recvfrom(socket, dataBuffer, UDP_PACKET_LEN - 1, 0, &srcAddr, &srcAddrLen);
-
-	if (bytesReceived == SOCKET_ERROR) {
-		//printf("Failed to receive data from theirAddr; Error: %d", WSAGetLastError());
-		return SOCKET_ERROR;
-	}
-	dataBuffer[bytesReceived] = '\0';
-
-	memcpy(receivedPacket, dataBuffer, DATA_BUF_LEN);
-
-	return 0;
-}
-
 void printCVSDTP_Packet(const CVSDTP_Packet* packet) {
 	if (packet->type == INITIALIZATION) {
 		printf("Type: INITIALIZATION\n");
@@ -359,6 +392,10 @@ void printCVSDTP_Packet(const CVSDTP_Packet* packet) {
 		printf("target: (%d, %d)\n", packet->target.coords.x, packet->target.coords.y);
 		printf("numTargets: %d\n", packet->targetState.numTargets);
 	}
+	else if (packet->type == INITIALIZED) {
+		printf("Type: INITIALIZED\n");
+		printf("Header: "BYTE_TO_BINARY_PATTERN"\n", BYTE_TO_BINARY(((uint8_t*)packet)[0]));
+	}
 	else {
 		printf("Type: COMPLETE\n");
 		printf("Header: "BYTE_TO_BINARY_PATTERN"\n", BYTE_TO_BINARY(((uint8_t*)packet)[0]));
@@ -367,23 +404,21 @@ void printCVSDTP_Packet(const CVSDTP_Packet* packet) {
 
 /* Object Creation Functions */
 
-Target createTarget(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color) {
+Target CVSDTP_CreateTarget(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color) {
 	return (Target){.coords = coords, .shape = shape, .rotation = rotation, .color = color, .found = false};
 }
 
-Distractor createDistractor(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color) {
+Distractor CVSDTP_CreateDistractor(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color) {
 	return (Distractor){.coords = coords, .shape = shape, .rotation = rotation, .color = color};
 }
 
 /* thanks https://stackoverflow.com/a/1202706 */
 
-/* Generate random coordinates in range xBounds,
-yBounds (set seed to NULL to omit seeding) */
-Vec2 getRandomCoords(Vec2 xBounds, Vec2 yBounds) {
+/* Generate random coordinates in range xBounds, yBounds */
+Vec2 getRandomCoords() {
 	Vec2 coords;
-	coords.x = rand() % (xBounds.y + 1 - xBounds.x) + xBounds.x;
-	coords.y = rand() % (yBounds.y + 1 - yBounds.x) + yBounds.x;
-
+	coords.x = rand() % (COORD_BOUNDS.y + 1 - COORD_BOUNDS.x) + COORD_BOUNDS.x;
+	coords.y = rand() % (COORD_BOUNDS.y + 1 - COORD_BOUNDS.x) + COORD_BOUNDS.x;
 	return coords;
 }
 
@@ -409,10 +444,9 @@ int main(int argc, char* argv[]) {
 			return 1;
 	}
 	else {
-		printf("usage:\n\t<destination IP address> <destination port> <local port> [optional rng seed]");
+		printf("usage:\n    <destination IP address> <destination port> <local port> [optional rng seed]");
 		return 0;
 	}
-
 	CVSDTP_Cleanup();
 	return 0;
-}
+}qwq

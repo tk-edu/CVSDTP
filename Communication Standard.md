@@ -33,11 +33,6 @@ list of (x, y) coordinates, shape, and color(?)
 ### Distractor State
 list of (x, y) coordinates, shape, and color(?)
 
-What needs to be communicated between program instances?
-* The sender's identity (PC1 or PC2?)
-* The receiver's identity (PC1 or PC2?)
-* The state of the sender's instance before a target is clicked(?)
-* The target that has been clicked
-* 
-
-we could randomly index into a locally stored hash table that holds the distractor / target types
+## Initialization Sequence
+- Both instances are started, listening to each other and each sending their own random seed
+- One of the instances happens to receive 
