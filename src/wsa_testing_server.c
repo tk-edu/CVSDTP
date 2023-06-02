@@ -92,7 +92,7 @@
 //			packetType = COMPLETE;
 //		}
 //
-//		printCVSDTP_Packet(&packet, packetType);
+//		printPacket(&packet, packetType);
 //		printf("\n");
 //	}
 //	closesocket(mySocket);

@@ -30,7 +30,7 @@ extern "C" {
 #define IS_INITIALIZED(header)  IS_SET(header, 1) && ~IS_SET(header, 0)
 #define IS_COMPLETE(header)		IS_SET(header, 1) &&  IS_SET(header, 0)
 
-#define EXPORT				__declspec(dllimport)
+#define EXPORT				__declspec(dllexport)
 
 // For printing binary numbers
 // https://stackoverflow.com/a/3208376
@@ -118,13 +118,13 @@ typedef struct {
 
 #pragma pack(pop)
 
-/* CVSDPT_Packets */
+/* CVSDPT_Packet */
 
 typedef enum {
-	INITIALIZATION,
-	UPDATE,
-	INITIALIZED,
-	COMPLETE
+	INITIALIZATION, /* Initializing a new state */
+	UPDATE,         /* Updating a state's TargetState */
+	INITIALIZED,    /* Communicating with other instance (unused) */
+	COMPLETE        /* Indicating all of a state's Targets have been found */
 } CVSDTP_PacketType;
 
 typedef struct {
@@ -136,27 +136,70 @@ typedef struct {
 	DistractorState distractorState;
 } CVSDTP_Packet;
 
+/* Global Variables */
+
+SOCKET gLocalSocket = INVALID_SOCKET;
+
+struct sockaddr_in gDstAddr;
+int gDstAddrLen;
+
+struct sockaddr_in gLocalAddr;
+int gLocalAddrLen;
+
+CVSDTP_Packet gInitPacket;
+bool gInitialized = false;
+Device gLocalDevice;
+Device gDstDevice;
+int gSeed;
+
+WSADATA gWsaData;
+
+HANDLE gReceiverThread = NULL;
+HANDLE gSenderThread = NULL;
+/* Critical Section is like a Mutex,
+but faster and can't be shared between
+processes (which doesn't matter for this) */
+CRITICAL_SECTION gCritSec;
+
 /* Boilerplate Functions */
 
-/*EXPORT*/ int CVSDTP_Startup(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort, int seed);
-/*EXPORT*/ void CVSDTP_Cleanup();
-/*EXPORT*/ DWORD WINAPI CVSDTP_StartSenderThread();
-/*EXPORT*/ DWORD WINAPI CVSDTP_StartReceiverThread();
+EXPORT int CVSDTP_Startup(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort, const int device, const int seed);
+EXPORT void CVSDTP_Cleanup();
+
+/* Boilerplate Helper Functions */
+
+void getLocalIPInfo(const uint16_t localPort);
+int initWinSock(const char* dstIpAddr, const uint16_t dstPort, const uint16_t localPort);
+int sum(uint8_t data[]);
+bool checksum(uint8_t data[]);
+int byteArrToInt(uint8_t data[]);
 
 /* CVSDPT_Packet Transfer Functions */
 
-/*EXPORT*/ int CVSDTP_SendPacket(const CVSDTP_Packet* packet);
-/*EXPORT*/ int CVSDTP_RecvPacket(CVSDTP_Packet* receivedPacket);
+EXPORT int CVSDTP_SendPacket(const CVSDTP_Packet* packet);
+EXPORT int CVSDTP_RecvPacket(CVSDTP_Packet* receivedPacket);
+EXPORT DWORD WINAPI CVSDTP_StartSenderThread(LPVOID lpParam);
+EXPORT DWORD WINAPI CVSDTP_StartReceiverThread(LPVOID lpParam);
 
 /* Object Creation Functions */
 
-/*EXPORT*/ Target CVSDTP_CreateTarget(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
-/*EXPORT*/ Distractor CVSDTP_CreateDistractor(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
-/*EXPORT*/ CVSDTP_Packet CVSDTP_CreateRandomState(int numTargets, int numDistractors);
+EXPORT Target CVSDTP_CreateTarget(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
+EXPORT Distractor CVSDTP_CreateDistractor(Vec2 coords, ObjectShape shape, ObjectRotation rotation, ObjectColor color);
+EXPORT CVSDTP_Packet CVSDTP_CreateRandomState(CVSDTP_PacketType packetType, int numTargets, int numDistractors, bool sameDistractors);
 
-// TODO: move this somewhere more appropriate
+/* CVSDPT_Packet Creation Helper Functions */
+
+CVSDTP_Packet createPacket(CVSDTP_PacketType packetType, const Target* target, const TargetState* targetState,
+                           const DistractorState* distractorState, Device sender, Device receiver);
+void writeInitializationPacketData(CVSDTP_Packet* packet, const TargetState* targetState,
+								   const DistractorState* distractorState);
+void writeUpdatePacketData(CVSDTP_Packet* packet, const Target* target,
+						   const TargetState* targetState);
 Vec2 getRandomCoords();
-void printCVSDTP_Packet(const CVSDTP_Packet* packet);
+ObjectShape getRandomShape();
+ObjectRotation getRandomRotation();
+ObjectColor getRandomColor();
+void printPacket(const CVSDTP_Packet* packet);
 
 #ifdef __cplusplus
 }
