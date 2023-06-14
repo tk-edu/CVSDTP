@@ -4,4 +4,4 @@ include/SDL2/*
 bin/SDL2.dll
 CVSDTP.exe
 CVSDTP.pdb
-src/test.*
+src/test/
